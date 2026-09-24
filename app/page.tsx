@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SnapshotGate } from "@/shared/snapshot-gate.mjs";
 import { buildSnapshot } from "@/shared/snapshot.mjs";
 import {
   TILE,
@@ -101,7 +102,7 @@ export default function Page() {
     paintTicks = useRef<{ time: number; cost: number }[]>([]),
     mounted = useRef(true),
     owners = useRef<string[]>([]),
-    lastViewport = useRef(""),
+    snapshotGate = useRef(new SnapshotGate()),
     replayState = useRef(false);
   const [selection, setSelection] = useState<Region>({
       x: 12,
@@ -254,6 +255,7 @@ export default function Page() {
           setRuns(data.runs);
           setPainted(163840 + data.totalPainted);
           cursor.current = data.head;
+          snapshotGate.current.activate();
           connect();
         })
         .catch((e) => {
@@ -486,8 +488,11 @@ export default function Page() {
         if (d.events.length < 100) break;
         after = d.events.at(-1).seq;
         if (i === 1999)
-          throw new Error(
-            "This region has too much history to load. Select a smaller view.",
+          throw Object.assign(
+            new Error(
+              "This region has too much history to load. Select a smaller view.",
+            ),
+            { terminal: true },
           );
       }
       if (
@@ -503,7 +508,10 @@ export default function Page() {
         includeLive ? history.current : [],
       );
       if (rebuilt.size > 2048)
-        throw new Error("Zoom in to see this densely painted region.");
+        throw Object.assign(
+          new Error("Zoom in to see this densely painted region."),
+          { terminal: true },
+        );
       for (const k of tiles.current.items.keys()) {
         const [x, y] = k.split(",").map(Number);
         if (
@@ -521,21 +529,17 @@ export default function Page() {
     [],
   );
   useEffect(() => {
-    let pending = false;
     const timer = setInterval(async () => {
-      if (pending || replayState.current) return;
+      if (replayState.current) return;
       const bounds = viewportBounds(),
         key = Object.values(bounds).join(",");
-      if (lastViewport.current === key) return;
-      pending = true;
-      lastViewport.current = key;
+      if (!snapshotGate.current.begin(key)) return;
       try {
         await loadSnapshot(bounds);
+        snapshotGate.current.success();
       } catch (e: any) {
-        lastViewport.current = "";
+        snapshotGate.current.fail(!!e.terminal);
         setError(e.message);
-      } finally {
-        pending = false;
       }
     }, 350);
     return () => clearInterval(timer);
@@ -780,7 +784,7 @@ export default function Page() {
     }
     replayState.current = false;
     setReplaying(false);
-    lastViewport.current = "";
+    snapshotGate.current.invalidate();
   }
   useEffect(() => {
     const context = (document as any).modelContext;

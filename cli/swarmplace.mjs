@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { runBounded } from "./process.mjs";
 import { mkdtemp, rm, readFile, writeFile, chmod } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import {
   applyPatches,
   tileKey,
 } from "../shared/world.mjs";
-import { rasterize, planSchema } from "./renderer.mjs";
+import { rasterize, schemaForRegion, replayPatches } from "./renderer.mjs";
 const sleep = (n) => new Promise((r) => setTimeout(r, n));
 const help = `Swarmplace · local painting agent\n\n  swarmplace --world https://your-world --code PAIRING_CODE --provider claude\n  swarmplace --world http://localhost:5173 --code PAIRING_CODE --provider simulation\n\nOptions:\n  --prompt "Moonlit lilies"   Private local painting brief\n  --provider claude|simulation|replay (default: simulation)\n  --input ./painting.json     Replay a saved canonical paint file\n  --export ./painting.json    Save public paint commands only\n  --max-seconds 90            Local process wall-clock limit\n  --max-usd 0.30              Claude CLI estimated spend threshold\n  --help                     Show this guide\n\nUse Claude's own login on your machine: claude auth login\nCredentials and model transcripts are never sent to Swarmplace.\n`;
 const { values: args } = parseArgs({
@@ -140,13 +140,7 @@ async function main() {
       const file = await readFile(args.input);
       if (file.length > 2e6) throw new Error("Replay is too large.");
       const saved = JSON.parse(file.toString());
-      if (saved.version !== 1 || !Array.isArray(saved.patches))
-        throw new Error("Unknown replay format.");
-      patches = saved.patches.map((p) => ({
-        ...p,
-        x: p.x - saved.region.x * TILE + region.x * TILE,
-        y: p.y - saved.region.y * TILE + region.y * TILE,
-      }));
+      patches = replayPatches(saved, region);
       phase = "accents";
     }
     if (args.provider === "claude") {
@@ -219,119 +213,69 @@ async function main() {
         console.log(
           "Claude is composing locally. Its private output will not be published.",
         );
-        const result = await new Promise((resolve, reject) => {
-          let out = "",
-            overflow = false;
-          const child = spawn(
-            "claude",
-            [
-              "--print",
-              "--safe-mode",
-              "--setting-sources",
-              "",
-              "--settings",
-              '{"disableAllHooks":true}',
-              "--tools",
-              "",
-              "--disallowedTools",
-              "mcp__*",
-              "--strict-mcp-config",
-              "--mcp-config",
-              '{"mcpServers":{}}',
-              "--no-chrome",
-              "--disable-slash-commands",
-              "--permission-mode",
-              "dontAsk",
-              "--no-session-persistence",
-              "--model",
-              "sonnet",
-              "--effort",
-              "low",
-              "--max-turns",
-              "2",
-              "--max-budget-usd",
-              String(maxUsd),
-              "--input-format",
-              "text",
-              "--output-format",
-              "json",
-              "--json-schema",
-              JSON.stringify(planSchema),
-              "--system-prompt",
-              "You are a pixel composition planner. Return only the requested structured shape data. Never provide reasoning, file access, commands, URLs, or credentials.",
-            ],
-            {
-              cwd: dir,
-              env,
-              stdio: ["pipe", "pipe", "pipe"],
-              shell: false,
-              detached: process.platform !== "win32",
-            },
+        const execution = await runBounded(
+          "claude",
+          [
+            "--print",
+            "--safe-mode",
+            "--setting-sources",
+            "",
+            "--settings",
+            '{"disableAllHooks":true}',
+            "--tools",
+            "",
+            "--disallowedTools",
+            "mcp__*",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--no-chrome",
+            "--disable-slash-commands",
+            "--permission-mode",
+            "dontAsk",
+            "--no-session-persistence",
+            "--model",
+            "sonnet",
+            "--effort",
+            "low",
+            "--max-turns",
+            "2",
+            "--max-budget-usd",
+            String(maxUsd),
+            "--input-format",
+            "text",
+            "--output-format",
+            "json",
+            "--json-schema",
+            JSON.stringify(schemaForRegion(region)),
+            "--system-prompt",
+            "You are a pixel composition planner. Return only the requested structured shape data. Never provide reasoning, file access, commands, URLs, or credentials.",
+          ],
+          { cwd: dir, env, input, timeoutMs: maxSeconds * 1000 },
+        );
+        let result;
+        try {
+          result = JSON.parse(execution.output);
+        } catch {}
+        if (
+          result?.is_error &&
+          /authenticate|OAuth|login|401/i.test(String(result.result))
+        )
+          throw new Error(
+            "Claude login expired or is unavailable. Run claude auth login, then create a new connection in the canvas.",
           );
-          const kill = () => {
-            try {
-              if (process.platform !== "win32")
-                process.kill(-child.pid, "SIGKILL");
-              else child.kill("SIGKILL");
-            } catch {}
-          };
-          const timer = setTimeout(kill, maxSeconds * 1000);
-          child.stdout.on("data", (chunk) => {
-            out += chunk.toString();
-            if (out.length > 1000000) {
-              overflow = true;
-              kill();
-            }
-          });
-          child.stderr.on("data", () => {});
-          child.on("error", () => {
-            clearTimeout(timer);
-            reject(
-              new Error(
-                "Claude Code is unavailable. Install it and run claude auth login locally.",
-              ),
-            );
-          });
-          child.on("close", (code) => {
-            clearTimeout(timer);
-            let metadata;
-            try {
-              metadata = JSON.parse(out);
-            } catch {}
-            if (
-              metadata?.is_error &&
-              /authenticate|OAuth|login|401/i.test(String(metadata.result))
-            )
-              return reject(
-                new Error(
-                  "Claude login expired or is unavailable. Run claude auth login, then create a new connection in the canvas.",
-                ),
-              );
-            if (code !== 0 || overflow)
-              return reject(
-                new Error(
-                  "Claude did not finish within the configured limits. No paint was sent.",
-                ),
-              );
-            try {
-              const parsed = metadata;
-              if (
-                parsed.is_error ||
-                parsed.subtype !== "success" ||
-                !parsed.structured_output
-              )
-                throw new Error();
-              resolve(parsed);
-            } catch {
-              reject(
-                new Error(
-                  "Claude returned no valid structured painting. No paint was sent.",
-                ),
-              );
-            }
-          });
-          child.stdin.end(input);
-        });
+        if (execution.code !== 0 || execution.overflow)
+          throw new Error(
+            "Claude did not finish within the configured limits. No paint was sent.",
+          );
+        if (
+          result?.is_error ||
+          result?.subtype !== "success" ||
+          !result?.structured_output
+        )
+          throw new Error(
+            "Claude returned no valid structured painting. No paint was sent.",
+          );
         const u = result.usage || {};
         usage = {
           input:

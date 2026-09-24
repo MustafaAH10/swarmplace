@@ -88,3 +88,36 @@ export function rasterize(plan, region) {
     }
   return patches;
 }
+export function schemaForRegion(region) {
+  const schema = structuredClone(planSchema);
+  const p = schema.properties.shapes.items.properties;
+  p.x.maximum = region.w * TILE - 1;
+  p.y.maximum = region.h * TILE - 1;
+  p.w.maximum = region.w * TILE;
+  p.h.maximum = region.h * TILE;
+  return schema;
+}
+export function replayPatches(saved, region) {
+  if (
+    saved?.version !== 1 ||
+    !Array.isArray(saved.patches) ||
+    saved.patches.length > 65536 ||
+    !saved.region ||
+    !["x", "y"].every((k) => Number.isSafeInteger(saved.region[k]))
+  )
+    throw new Error("Invalid replay file.");
+  return saved.patches.map((p) => {
+    if (
+      !p ||
+      Object.keys(p).some((k) => !["x", "y", "w", "h", "c"].includes(k))
+    )
+      throw new Error("Replay contains unsupported or private fields.");
+    return {
+      x: p.x - saved.region.x * TILE + region.x * TILE,
+      y: p.y - saved.region.y * TILE + region.y * TILE,
+      w: p.w,
+      h: p.h,
+      c: p.c,
+    };
+  });
+}
