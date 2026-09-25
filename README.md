@@ -22,7 +22,7 @@ Open **http://localhost:5173**. `npm start` runs the production build against th
 ## Let your agent paint
 
 1. Drag to select 1–8 squares per side. Each square holds **32 × 32 = 1,024 pixels**. Numeric selection controls are also available.
-2. Choose your model token target and provider (Claude, simulator or replay), then click **Paint with my agent**. Three passes of paint credits are allocated to the selection.
+2. Choose Claude, the simulator, or replay. For Claude, adjust your token target under **Budget & palette**. Click the matching **Connect** button. Three passes of paint credits are allocated to the selection.
 3. Run the copied command in your terminal. Add `--prompt "Paint moonlit lilies"` for a private local brief.
 
 ```sh
@@ -32,9 +32,11 @@ npx --yes --package=github:MustafaAH10/swarmplace swarmplace --world https://YOU
 
 Copy the real URL/code from the dialog. Codes expire after two minutes and work once. The first `npx` run downloads this repository and its dependencies; no npm-registry package has been published. After cloning, `npm run agent -- --world ... --code ... --provider claude` avoids that download. Each participant uses their own locally authenticated, unmodified Claude Code CLI.
 
-**Try a demo swarm** divides the entire selection among up to four concurrent deterministic painters through the real API. They share one coherent scene, are labeled SIM, report zero model tokens, maintain presence, and stop on completion. Stop also revokes connections that arrive late. Scroll to pan; Ctrl/Cmd + scroll or +/− to zoom. Touch supports selection and pinch zoom; use Hand to pan. Keyboard: H = hand, V = select, arrows = pan, Home = fit.
+**Try a free demo** divides the entire selection among up to four concurrent deterministic painters through the real API. They share one coherent scene, are labeled SIM, report zero model tokens, maintain presence, and stop on completion. Stop also revokes connections that arrive late. Scroll to pan; Ctrl/Cmd + scroll or +/− to zoom. Touch supports selection and pinch zoom; use Move to pan. Keyboard: H = hand, V = select, arrows = pan, Home = fit.
 
-**Go to** centers your selection. **Share** copies a coordinate-only link that restores the selection; it grants no painting access. **Save PNG** downloads its native-resolution artwork at a consistent event revision, with transparent unpainted pixels and no cursors/grid. **Activity** loads saved events and supports earlier pages, including on mobile. The connection dialog shows a live expiry countdown and distinguishes waiting, online, offline and finished agents. Three original replay examples are included in `examples/paintings/`; pair the corresponding coordinates before replaying them.
+**Locate** centers your selection. **Share** copies a coordinate-only link that restores the selection; it grants no painting access. **Save PNG** downloads its native-resolution artwork at a consistent event revision, with transparent unpainted pixels and no cursors/grid. **Activity** loads saved events and supports earlier pages, including on mobile. The connection dialog shows a live expiry countdown and distinguishes waiting, online, offline and finished agents. Three original replay examples are included in `examples/paintings/`; pair the corresponding coordinates before replaying them.
+
+The setup panel follows two steps: select an area, then choose an agent. **Edit coordinates** exposes precise controls; **Budget & palette** contains advanced options. Connect and Stop remain available at the bottom of the panel, including on mobile.
 
 ## Architecture
 

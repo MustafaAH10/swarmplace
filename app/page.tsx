@@ -105,7 +105,8 @@ const fmt = (n: number) =>
   }).format(n);
 export default function Page() {
   const canvas = useRef<HTMLCanvasElement>(null),
-    camera = useRef<Camera>({ x: 256, y: 125, zoom: 1.35 }),
+    camera = useRef<Camera>({ x: 256, y: 160, zoom: 1.35 }),
+    cameraPlaced = useRef(false),
     tiles = useRef(new LRU(2048)),
     dirty = useRef(true),
     size = useRef({ w: 800, h: 600 }),
@@ -250,6 +251,7 @@ export default function Page() {
     const restoreSelection = () => {
       const selected = parseSelectionHash(location.hash);
       if (!selected) return;
+      cameraPlaced.current = true;
       setSelection(selected);
       camera.current = {
         ...camera.current,
@@ -341,6 +343,15 @@ export default function Page() {
     const resize = new ResizeObserver((entries) => {
       const rect = entries[0].contentRect;
       size.current = { w: rect.width, h: rect.height };
+      if (!cameraPlaced.current && rect.width > 0 && rect.height > 0) {
+        cameraPlaced.current = true;
+        const fit = Math.max(
+          0.2,
+          Math.min((rect.width - 72) / 512, (rect.height - 180) / 320, 1.8),
+        );
+        camera.current = { x: 256, y: 160, zoom: fit };
+        setZoom(Math.round(fit * 100));
+      }
       el.width = rect.width * Math.min(devicePixelRatio, 2);
       el.height = rect.height * Math.min(devicePixelRatio, 2);
       dirty.current = true;
@@ -359,7 +370,7 @@ export default function Page() {
         c = camera.current,
         dpr = Math.min(devicePixelRatio, 2);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#e8ece8";
+      ctx.fillStyle = "#f3f4f6";
       ctx.fillRect(0, 0, w, h);
       const left = c.x - w / 2 / c.zoom,
         top = c.y - h / 2 / c.zoom,
@@ -407,7 +418,7 @@ export default function Page() {
           );
         }
       ctx.lineWidth = 1;
-      ctx.strokeStyle = "rgba(54,77,67,.10)";
+      ctx.strokeStyle = "rgba(61,72,88,.055)";
       if (c.zoom >= 0.65) {
         ctx.beginPath();
         for (let x = x0; x <= x1 + 1; x++) {
@@ -473,19 +484,19 @@ export default function Page() {
         }
       }
       const s = selectionRef.current;
-      ctx.fillStyle = "rgba(207,240,141,.13)";
+      ctx.fillStyle = "rgba(113,109,247,.12)";
       ctx.fillRect(
         (s.x * TILE - left) * c.zoom,
         (s.y * TILE - top) * c.zoom,
         s.w * TILE * c.zoom,
         s.h * TILE * c.zoom,
       );
-      box(s, "#d2f48a");
+      box(s, "#aaa6ff");
       const hvr = hoverRef.current;
       if (hvr) {
         box({ ...hvr, w: 1, h: 1 }, "rgba(255,255,255,.95)");
       }
-      ctx.fillStyle = "#d2f48a";
+      ctx.fillStyle = "#aaa6ff";
       for (const [x, y] of [
         [s.x, s.y],
         [s.x + s.w, s.y],
@@ -995,19 +1006,21 @@ export default function Page() {
             <i />
             <i />
           </span>
-          swarmplace<span className="beta">BETA</span>
+          swarmplace
+          <span className="brand-divider" />
+          <span className="brand-context">Community canvas</span>
         </a>
         <Tabs value={tab} onValueChange={setTab} className="navtabs">
           <TabsList>
             <TabsTrigger value="canvas">Canvas</TabsTrigger>
             <TabsTrigger value="activity">Activity</TabsTrigger>
-            <TabsTrigger value="guide">How it works</TabsTrigger>
+            <TabsTrigger value="guide">How to paint</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="top-actions">
           <span className="world-status">
             <span className={connected ? "status-dot live" : "status-dot"} />
-            {connected ? "World live" : "Connecting"}
+            {connected ? "Live" : "Connecting…"}
           </span>
           <a
             className="repo-link"
@@ -1017,23 +1030,14 @@ export default function Page() {
           >
             GitHub <ArrowUpRight size={15} />
           </a>
-          <button className="button dark" onClick={createPair} disabled={busy}>
-            <Plus size={16} /> Connect agent
-          </button>
         </div>
       </header>
       <section className="workspace">
         <div className="canvas-area">
           <div className="world-caption">
-            <span className="eyebrow">SHARED WORLD / 001</span>
-            <h1>
-              The night garden<span className="live-pill">OPEN CANVAS</span>
-            </h1>
-            <p>A little more beautiful, together.</p>
-          </div>
-          <div className="canvas-note">
-            <span className="seed-dot" />
-            Original seeded artwork · shared palette
+            <span className="canvas-kicker">CANVAS 001</span>
+            <h1>Night garden</h1>
+            <p>Drag to select a place to paint.</p>
           </div>
           <canvas
             ref={canvas}
@@ -1080,7 +1084,8 @@ export default function Page() {
               aria-label="Select tiles"
               onClick={() => setTool("select")}
             >
-              <SquareDashedMousePointer size={20} />
+              <SquareDashedMousePointer size={18} />
+              <span>Select</span>
             </button>
             <button
               className={tool === "pan" ? "selected" : ""}
@@ -1088,7 +1093,8 @@ export default function Page() {
               aria-label="Pan canvas"
               onClick={() => setTool("pan")}
             >
-              <Hand size={20} />
+              <Hand size={18} />
+              <span>Move</span>
             </button>
             <span />
             <button
@@ -1111,10 +1117,8 @@ export default function Page() {
           <div className="canvas-bottom">
             <div className="navigation-hint">
               <MousePointer2 size={14} />
-              <span>Drag to select</span>
-              <i />
-              Scroll to pan{" "}
-              <span className="desktop-hint">· Ctrl + scroll to zoom</span>
+              <span>Scroll to pan</span>{" "}
+              <span className="desktop-hint">· Ctrl / ⌘ + scroll to zoom</span>
             </div>
             <div className="zoom-control">
               <button aria-label="Zoom out" onClick={() => changeZoom(1 / 1.3)}>
@@ -1124,9 +1128,6 @@ export default function Page() {
               <button aria-label="Zoom in" onClick={() => changeZoom(1.3)}>
                 <Plus size={16} />
               </button>
-              <button aria-label="Reset view" onClick={home}>
-                <Maximize size={15} />
-              </button>
             </div>
           </div>
           {replaying && (
@@ -1135,11 +1136,12 @@ export default function Page() {
             </div>
           )}
           <button
-            className="mobile-selection button dark"
+            className="mobile-selection button"
             onClick={() => setShowPanel(!showPanel)}
           >
             <Layers size={16} />
-            {selection.w * selection.h} tiles selected{" "}
+            <span>{selection.w * selection.h} tiles selected</span>
+            <strong>Paint selection</strong>
             <ChevronRight size={16} />
           </button>
           {tab !== "canvas" && (
@@ -1149,8 +1151,8 @@ export default function Page() {
               </button>
               {tab === "guide" ? (
                 <>
-                  <span className="eyebrow">A SMALL GUIDE TO A BIG CANVAS</span>
-                  <h2>Your agent. Our garden.</h2>
+                  <span className="eyebrow">GETTING STARTED</span>
+                  <h2>From selection to painting.</h2>
                   <p>
                     Pick a place, give your agent a direction, and watch it
                     become part of the painting.
@@ -1158,7 +1160,7 @@ export default function Page() {
                   <div className="guide-steps">
                     <article>
                       <b>01</b>
-                      <h3>Make some space</h3>
+                      <h3>Select an area</h3>
                       <p>
                         Drag across the grid to select up to 8 × 8 squares. Each
                         square holds 1,024 pixels. Scroll to travel; pinch or
@@ -1167,7 +1169,7 @@ export default function Page() {
                     </article>
                     <article>
                       <b>02</b>
-                      <h3>Give your agent a brief</h3>
+                      <h3>Connect your agent</h3>
                       <p>
                         Connect Claude locally using the command for your
                         selection. Add{" "}
@@ -1178,7 +1180,7 @@ export default function Page() {
                     </article>
                     <article>
                       <b>03</b>
-                      <h3>Let it grow</h3>
+                      <h3>Watch it paint</h3>
                       <p>
                         Every agent uses the garden’s 16-color palette. Claims
                         are shared intentions, so neighbors can overlap. Paint
@@ -1207,10 +1209,11 @@ export default function Page() {
                 </>
               ) : (
                 <>
-                  <span className="eyebrow">THE WORLD, AS IT HAPPENS</span>
-                  <h2>Every mark has a story.</h2>
+                  <span className="eyebrow">ACTIVITY</span>
+                  <h2>Canvas history</h2>
                   <p>
-                    Structured activity only. No private prompts or reasoning.
+                    Paint, connections, and coordination across the shared
+                    canvas.
                   </p>
                   <div className="event-list">
                     {events.length ? (
@@ -1245,7 +1248,7 @@ export default function Page() {
                     ) : (
                       <div className="empty">
                         <Radio />
-                        <h3>The garden is quiet.</h3>
+                        <h3>No activity yet.</h3>
                         <p>
                           Connect an agent or run the demo to see real paint
                           events here.
@@ -1269,279 +1272,348 @@ export default function Page() {
             </div>
           )}
         </div>
-        <aside className={`inspector ${showPanel ? "mobile-open" : ""}`}>
+        {showPanel && (
+          <button
+            className="panel-backdrop"
+            aria-label="Close selection panel"
+            onClick={() => setShowPanel(false)}
+          />
+        )}
+        <aside
+          aria-label="Painting setup"
+          className={`inspector ${showPanel ? "mobile-open" : ""}`}
+        >
           <div className="panel-heading">
-            <span className="eyebrow">YOUR NEXT CONTRIBUTION</span>
-            <button
-              className="mobile-close"
-              aria-label="Close selection"
-              onClick={() => setShowPanel(false)}
-            >
-              <X size={18} />
-            </button>
-            <h2>A patch of possibility.</h2>
-            <p>Select a few squares. Let your agent do the rest.</p>
-          </div>
-          <section className="selection-card">
             <div className="row">
-              <span className="label">
-                <SquareDashedMousePointer size={16} /> Selected region
-              </span>
-              <span className="small-badge">
-                {selection.w * selection.h} TILES
-              </span>
-            </div>
-            <div className="selection-preview">
-              <div
-                className="mini-grid"
-                style={{ gridTemplateColumns: `repeat(${selection.w},1fr)` }}
+              <h2>Paint a selection</h2>
+              <button
+                className="mobile-close"
+                aria-label="Close selection"
+                onClick={() => setShowPanel(false)}
               >
-                {Array.from({ length: selection.w * selection.h }, (_, i) => (
-                  <span key={i} />
-                ))}
-              </div>
-              <div>
-                <strong>
-                  {selection.w * 32} × {selection.h * 32}
-                  <small>pixels</small>
-                </strong>
-                <span className="coordinates">
-                  ({selection.x}, {selection.y}) → (
-                  {selection.x + selection.w - 1},{" "}
-                  {selection.y + selection.h - 1})
-                </span>
-              </div>
+                <X size={20} />
+              </button>
             </div>
-            <div className="card-footer">
-              <span>{fmt(regionPixels(selection))} paintable pixels</span>
-              <span>32 px / tile</span>
-            </div>
-          </section>
-          <div className="region-inputs">
-            <label>
-              Column
-              <input
-                aria-label="Selection column"
-                type="number"
-                min={-32768}
-                max={32760}
-                value={selection.x}
-                onChange={(e) =>
-                  setSelection((s) => ({
-                    ...s,
-                    x: Math.max(
-                      -32768,
-                      Math.min(32760, Number(e.target.value)),
-                    ),
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Row
-              <input
-                aria-label="Selection row"
-                type="number"
-                min={-32768}
-                max={32760}
-                value={selection.y}
-                onChange={(e) =>
-                  setSelection((s) => ({
-                    ...s,
-                    y: Math.max(
-                      -32768,
-                      Math.min(32760, Number(e.target.value)),
-                    ),
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Width
-              <input
-                aria-label="Selection width"
-                type="number"
-                min={1}
-                max={8}
-                value={selection.w}
-                onChange={(e) =>
-                  setSelection((s) => ({
-                    ...s,
-                    w: Math.max(1, Math.min(8, Number(e.target.value))),
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Height
-              <input
-                aria-label="Selection height"
-                type="number"
-                min={1}
-                max={8}
-                value={selection.h}
-                onChange={(e) =>
-                  setSelection((s) => ({
-                    ...s,
-                    h: Math.max(1, Math.min(8, Number(e.target.value))),
-                  }))
-                }
-              />
-            </label>
+            <p>Choose an area. Connect a local agent.</p>
           </div>
-          <div className="selection-actions">
-            <button onClick={focusSelection} title="Go to selection">
-              <LocateFixed size={15} /> Go to
-            </button>
-            <button onClick={shareSelection}>
-              <Link size={15} />
-              {shared ? "Copied!" : "Share"}
-            </button>
-            <button onClick={exportSelection} disabled={exporting}>
-              <Download size={15} />
-              {exporting ? "Saving…" : "Save PNG"}
-            </button>
-          </div>
-          <section className="budget-section">
-            <div className="row">
-              <span className="label">Model token budget</span>
-              <strong>{fmt(modelBudget)}</strong>
-            </div>
-            <Slider
-              aria-label="Model token budget"
-              min={4000}
-              max={64000}
-              step={1000}
-              value={[modelBudget]}
-              onValueChange={(v) => setModelBudget(v[0])}
-            />
-            <div className="range-labels">
-              <span>4k tokens</span>
-              <span>64k tokens</span>
-            </div>
-            <p>
-              ~{fmt(estimateTokens(selection))} planning estimate; usage varies.
-              <br />
-              {fmt(regionPixels(selection) * 3)} paint credits · up to 3 passes.
-            </p>
-          </section>
-          <div className="palette-section">
-            <div className="row">
-              <span className="label">The garden palette</span>
-              <span className="soft-text">Shared by every agent</span>
-            </div>
-            <div className="palette">
-              {PALETTE.map((color: string) => (
-                <span key={color} title={color} style={{ background: color }} />
-              ))}
-            </div>
-          </div>
-          <label className="provider-select">
-            Run on your computer
-            <select
-              aria-label="Agent provider"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-            >
-              <option value="claude">Claude Code · your account</option>
-              <option value="simulation">Simulator · no model needed</option>
-              <option value="replay">Replay · saved painting file</option>
-            </select>
-          </label>
-          <button
-            className="button connect-primary"
-            onClick={createPair}
-            disabled={busy}
-          >
-            {busy ? (
-              "Preparing selection…"
-            ) : (
-              <>
-                Paint with my agent <ArrowUpRight size={18} />
-              </>
-            )}
-          </button>
-          <button
-            className="button demo-button"
-            onClick={simulate}
-            disabled={simulating}
-          >
-            <Play size={15} />
-            {simulating ? "Demo agents are painting…" : "Try a demo swarm"}
-            <span>FREE</span>
-          </button>
-          <p className="local-note">
-            <ShieldCheck size={14} />
-            Your account stays on your machine.
-          </p>
-          <div className="agents-section">
-            <div className="row">
-              <span className="label">On the canvas</span>
-              <span className="agent-count">{active.length} active</span>
-            </div>
-            {active.length ? (
-              active.slice(0, 4).map((r) => (
-                <div className="agent-row" key={r.id}>
-                  <span className="agent-avatar">
-                    <Leaf size={17} />
-                  </span>
+          <div className="inspector-body">
+            <section className="setup-step">
+              <h3 className="step-heading">
+                <span>1</span>Select an area
+              </h3>
+              <div className="selection-card">
+                <div className="selection-preview">
+                  <div
+                    className="mini-grid"
+                    aria-hidden="true"
+                    style={{
+                      gridTemplateColumns: `repeat(${selection.w},1fr)`,
+                    }}
+                  >
+                    {Array.from(
+                      { length: selection.w * selection.h },
+                      (_, i) => (
+                        <span key={i} />
+                      ),
+                    )}
+                  </div>
                   <div>
                     <strong>
-                      {r.name}
-                      <span>
-                        {r.mode === "simulation" ? "SIM" : r.mode.toUpperCase()}
-                      </span>
+                      {selection.w * 32} × {selection.h * 32}
+                      <small>px</small>
                     </strong>
-                    <p>
-                      {r.phase} · {fmt(r.used)} / {fmt(r.budget)} px
-                    </p>
-                    <div className="progress-track">
-                      <i
-                        style={{
-                          width: `${Math.min(100, (r.used / r.budget) * 100)}%`,
-                        }}
-                      />
-                    </div>
+                    <span className="coordinates">
+                      {selection.w * selection.h} tiles ·{" "}
+                      {fmt(regionPixels(selection))} pixels
+                    </span>
                   </div>
                 </div>
-              ))
-            ) : (
-              <div className="quiet-world">
-                <span className="agent-avatar">
-                  <Leaf size={19} />
-                </span>
-                <p>
-                  Room for your imagination.
-                  <br />
-                  <span>Be the next agent in the garden.</span>
-                </p>
+                <div className="card-footer">
+                  <span>1 tile = 32 × 32 pixels</span>
+                  <span>Up to 8 × 8 tiles</span>
+                </div>
               </div>
-            )}
-            {owners.current.length > 0 && (
-              <button className="text-button" onClick={stop}>
-                <Pause size={13} /> Stop my agents
+              <details className="advanced coordinates-details">
+                <summary>
+                  Edit coordinates <ChevronRight size={15} />
+                </summary>
+                <div className="region-inputs">
+                  <label>
+                    Column
+                    <input
+                      aria-label="Selection column"
+                      type="number"
+                      min={-32768}
+                      max={32760}
+                      value={selection.x}
+                      onChange={(e) =>
+                        setSelection((s) => ({
+                          ...s,
+                          x: Math.max(
+                            -32768,
+                            Math.min(32760, Number(e.target.value)),
+                          ),
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Row
+                    <input
+                      aria-label="Selection row"
+                      type="number"
+                      min={-32768}
+                      max={32760}
+                      value={selection.y}
+                      onChange={(e) =>
+                        setSelection((s) => ({
+                          ...s,
+                          y: Math.max(
+                            -32768,
+                            Math.min(32760, Number(e.target.value)),
+                          ),
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Width
+                    <input
+                      aria-label="Selection width"
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={selection.w}
+                      onChange={(e) =>
+                        setSelection((s) => ({
+                          ...s,
+                          w: Math.max(1, Math.min(8, Number(e.target.value))),
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Height
+                    <input
+                      aria-label="Selection height"
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={selection.h}
+                      onChange={(e) =>
+                        setSelection((s) => ({
+                          ...s,
+                          h: Math.max(1, Math.min(8, Number(e.target.value))),
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+              </details>
+              <div className="selection-actions">
+                <button onClick={focusSelection} title="Go to selection">
+                  <LocateFixed size={15} /> Locate
+                </button>
+                <button onClick={shareSelection}>
+                  <Link size={15} />
+                  {shared ? "Copied!" : "Share"}
+                </button>
+                <button onClick={exportSelection} disabled={exporting}>
+                  <Download size={15} />
+                  {exporting ? "Saving…" : "Save PNG"}
+                </button>
+              </div>
+            </section>
+            <section className="setup-step agent-setup">
+              <h3 className="step-heading">
+                <span>2</span>Choose an agent
+              </h3>
+              <label className="provider-select">
+                <span className="sr-only">Agent provider</span>
+                <select
+                  aria-label="Agent provider"
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                >
+                  <option value="claude">Claude Code</option>
+                  <option value="simulation">Local simulator</option>
+                  <option value="replay">Replay a painting</option>
+                </select>
+              </label>
+              <p className="provider-help">
+                {provider === "claude"
+                  ? "Uses Claude Code on your computer."
+                  : provider === "simulation"
+                    ? "Runs locally. No AI account or tokens needed."
+                    : "Replays a saved painting from your computer."}
+              </p>
+              <details className="advanced budget-details">
+                <summary>
+                  <span>Budget & palette</span>
+                  <span className="budget-value">
+                    {provider === "claude"
+                      ? `${fmt(modelBudget)} tokens`
+                      : "0 model tokens"}
+                  </span>
+                  <ChevronRight size={15} />
+                </summary>
+                <section className="budget-section">
+                  {provider === "claude" && (
+                    <>
+                      <div className="row">
+                        <span className="label">Model token budget</span>
+                        <strong>{fmt(modelBudget)}</strong>
+                      </div>
+                      <Slider
+                        aria-label="Model token budget"
+                        min={4000}
+                        max={64000}
+                        step={1000}
+                        value={[modelBudget]}
+                        onValueChange={(v) => setModelBudget(v[0])}
+                      />
+                      <div className="range-labels">
+                        <span>4k tokens</span>
+                        <span>64k tokens</span>
+                      </div>
+                    </>
+                  )}
+                  <p>
+                    {provider === "claude" && (
+                      <>
+                        ~{fmt(estimateTokens(selection))} planning estimate;
+                        usage varies.
+                        <br />
+                      </>
+                    )}
+                    {fmt(regionPixels(selection) * 3)} paint credits · up to 3
+                    passes.
+                  </p>
+                </section>
+                <div className="palette-section">
+                  <div className="row">
+                    <span className="label">Shared palette</span>
+                    <span className="soft-text">16 colors</span>
+                  </div>
+                  <div className="palette">
+                    {PALETTE.map((color: string) => (
+                      <span
+                        key={color}
+                        title={color}
+                        style={{ background: color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </details>
+            </section>
+            <div className="agents-section">
+              <div className="row">
+                <span className="label">Live agents</span>
+                <span className="agent-count">{active.length} active</span>
+              </div>
+              {active.length ? (
+                active.slice(0, 4).map((r) => (
+                  <div className="agent-row" key={r.id}>
+                    <span className="agent-avatar">
+                      <Leaf size={17} />
+                    </span>
+                    <div>
+                      <strong>
+                        {r.name}
+                        <span>
+                          {r.mode === "simulation"
+                            ? "SIM"
+                            : r.mode.toUpperCase()}
+                        </span>
+                      </strong>
+                      <p>
+                        {r.phase} · {fmt(r.used)} / {fmt(r.budget)} px
+                      </p>
+                      <div className="progress-track">
+                        <i
+                          style={{
+                            width: `${Math.min(100, (r.used / r.budget) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="quiet-world">
+                  <span className="agent-avatar">
+                    <Radio size={17} />
+                  </span>
+                  <p>
+                    No agents painting right now.
+                    <br />
+                    <span>Start a demo or connect your own.</span>
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="inspector-footer">
+            <button
+              className="button connect-primary"
+              onClick={createPair}
+              disabled={busy}
+            >
+              {busy ? (
+                "Preparing connection…"
+              ) : (
+                <>
+                  <Terminal size={17} />
+                  {provider === "claude"
+                    ? "Connect Claude"
+                    : provider === "simulation"
+                      ? "Connect simulator"
+                      : "Connect replay"}
+                  <ChevronRight size={17} />
+                </>
+              )}
+            </button>
+            <button
+              className="button demo-button"
+              onClick={simulating ? stop : simulate}
+            >
+              {simulating ? <Pause size={15} /> : <Play size={15} />}
+              {simulating ? "Stop demo agents" : "Try a free demo"}
+            </button>
+            {owners.current.length > 0 && !simulating && (
+              <button className="text-button run-stop" onClick={stop}>
+                <Pause size={13} />
+                Stop my agents
               </button>
             )}
+            <p className="local-note">
+              <ShieldCheck size={14} />
+              Your credentials stay off this site.
+            </p>
           </div>
         </aside>
       </section>
       <footer className="statusbar">
         <div>
           <span className={connected ? "status-dot live" : "status-dot"} />
-          <strong>{active.length}</strong> agents connected
+          <strong>{active.length}</strong> agents online
           <span className="divider" />
           <strong>{fmt(rate)}</strong> pixels / min
           <span className="divider" />
-          <strong>{fmt(tokens)}</strong> reported tokens
+          <strong>{fmt(tokens)}</strong> tokens
         </div>
         <div>
-          <span className="desktop-hint">
-            {fmt(painted)} pixel writes incl. seed
-          </span>
+          <span className="desktop-hint">{fmt(painted)} pixel writes</span>
           <span className="divider" />
-          <span>
-            Room to keep growing <span className="infinity">∞</span>
-          </span>
+          <a
+            className="footer-help"
+            href="https://github.com/MustafaAH10/swarmplace"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open source <ArrowUpRight size={12} />
+          </a>
         </div>
       </footer>
       {error && (
@@ -1560,17 +1632,21 @@ export default function Page() {
           <span className="modal-icon">
             <Terminal size={24} />
           </span>
-          <DialogTitle>Give your agent a place to paint.</DialogTitle>
+          <DialogTitle>Connect your agent</DialogTitle>
           <DialogDescription>
-            Run this command in your terminal. Your agent receives only the
-            selected region and its paint budget. Connection codes work once.
+            Copy the command below into your terminal. Your agent will paint the
+            selected area and appear here automatically.
           </DialogDescription>
           <div className="modal-summary">
             <span>
               {(pair?.run.region.w || 0) * 32} ×{" "}
               {(pair?.run.region.h || 0) * 32} pixels
             </span>
-            <span>{fmt(pair?.run.tokenBudget || 0)} token target</span>
+            <span>
+              {pair?.run.mode === "claude"
+                ? `${fmt(pair?.run.tokenBudget || 0)} token target`
+                : "No model tokens"}
+            </span>
             <span>
               {pair?.run.mode === "claude"
                 ? "Local Claude"
@@ -1653,7 +1729,7 @@ export default function Page() {
             </p>
           </div>
           <button className="button dark" onClick={() => setDialog(false)}>
-            Back to the garden <ArrowUpRight size={16} />
+            Back to canvas <ArrowUpRight size={16} />
           </button>
         </DialogContent>
       </Dialog>
