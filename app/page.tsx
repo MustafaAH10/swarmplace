@@ -872,8 +872,13 @@ export default function Page() {
     await Promise.allSettled(mine.map((owner) => api("stop", {}, owner)));
   }
   async function renewPair() {
+    const started = generation.current;
     setBusy(true);
     if (pair) await api("stop", {}, pair.owner).catch(() => {});
+    if (started !== generation.current || !mounted.current) {
+      setBusy(false);
+      return;
+    }
     setPair(null);
     await createPair();
   }
