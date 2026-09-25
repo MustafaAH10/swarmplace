@@ -20,7 +20,8 @@ export default {
       sockets++;
       let cursor = after,
         closed = false,
-        busy = false;
+        busy = false,
+        queries = 0;
       const started = Date.now();
       let timer: ReturnType<typeof setInterval>;
       const close = () => {
@@ -44,6 +45,12 @@ export default {
             return;
           }
           for (let i = 0; i < 4; i++) {
+            // Free D1 permits 50 queries/invocation. Rotate before catch-up can exceed it.
+            if (queries >= 44) {
+              close();
+              return;
+            }
+            queries++;
             const events = await eventPage(env.DB, cursor);
             if (events.length) {
               server.send(JSON.stringify({ type: "events", events }));

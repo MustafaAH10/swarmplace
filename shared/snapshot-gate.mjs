@@ -39,6 +39,10 @@ export class SnapshotGate {
     this.retryAt = 0;
     this.failures = 0;
   }
+  cancel() {
+    this.pending = false;
+    this.invalidate();
+  }
   fail(terminal, now = Date.now()) {
     this.pending = false;
     this.failedKey = this.key;

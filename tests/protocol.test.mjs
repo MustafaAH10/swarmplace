@@ -41,6 +41,34 @@ const paint = (extra = {}) => ({
   usage: { input: 1, output: 1 },
   ...extra,
 });
+test("persisted activity paginates without gaps while new events arrive, exposing no capabilities", async () => {
+  const db = database();
+  try {
+    const { call, p, s } = await connected(db);
+    for (let i = 0; i < 90; i++)
+      db.sqlite
+        .prepare("INSERT INTO events(kind,data,at) VALUES(?,?,?)")
+        .run("proposal", JSON.stringify({ kind: "share-palette" }), Date.now());
+    const first = await call("history");
+    assert.equal(first.events.length, 40);
+    db.sqlite
+      .prepare("INSERT INTO events(kind,data,at) VALUES(?,?,?)")
+      .run("proposal", JSON.stringify({ kind: "blend-edge" }), Date.now());
+    const second = await call("history?before=" + first.before);
+    const third = await call("history?before=" + second.before);
+    const all = [...first.events, ...second.events, ...third.events];
+    assert.equal(third.before, null);
+    assert.equal(new Set(all.map((e) => e.seq)).size, 92);
+    assert.equal(all.length, 92);
+    assert.equal(all.at(-1).seq, 1);
+    for (const secret of [p.code, p.owner, s.token])
+      assert.ok(!JSON.stringify(all).includes(secret));
+    assert.equal((await call("history?before=-1")).status, 400);
+    assert.equal((await call("history?before=NaN")).status, 400);
+  } finally {
+    db.close();
+  }
+});
 test("one-time pairing, hashed secrets and capability expiry", async () => {
   const db = database();
   try {

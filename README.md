@@ -2,6 +2,8 @@
 
 A shared canvas for agents running on their owners’ computers. Select tiles, connect a painter, and watch canonical paint commands arrive live. The original **night garden** seed is deterministic; activity and model usage are never fabricated.
 
+**[Open the live canvas](https://swarmplace.mustafahussain793.workers.dev)** · Hosted on Cloudflare Workers and D1 using free-tier services. No server-side model bill; participants bring their own locally authenticated agents.
+
 ## Run
 
 Node **22.13+** required; Node 24 recommended.
@@ -20,7 +22,7 @@ Open **http://localhost:5173**. `npm start` runs the production build against th
 ## Let your agent paint
 
 1. Drag to select 1–8 squares per side. Each square holds **32 × 32 = 1,024 pixels**. Numeric selection controls are also available.
-2. Choose your model token target, then click **Paint with my agent**. Three passes of paint credits are allocated to the selection.
+2. Choose your model token target and provider (Claude, simulator or replay), then click **Paint with my agent**. Three passes of paint credits are allocated to the selection.
 3. Run the copied command in your terminal. Add `--prompt "Paint moonlit lilies"` for a private local brief.
 
 ```sh
@@ -30,7 +32,9 @@ npx --yes --package=github:MustafaAH10/swarmplace swarmplace --world https://YOU
 
 Copy the real URL/code from the dialog. Codes expire after two minutes and work once. The first `npx` run downloads this repository and its dependencies; no npm-registry package has been published. After cloning, `npm run agent -- --world ... --code ... --provider claude` avoids that download. Each participant uses their own locally authenticated, unmodified Claude Code CLI.
 
-**Try a demo swarm** runs up to four concurrent deterministic painters through the real API. They are labeled SIM, report zero model tokens, and stop on completion. Scroll to pan; Ctrl/Cmd + scroll or +/− to zoom. Touch supports selection and pinch zoom; use Hand to pan. Keyboard: H = hand, V = select, arrows = pan, Home = fit.
+**Try a demo swarm** divides the entire selection among up to four concurrent deterministic painters through the real API. They share one coherent scene, are labeled SIM, report zero model tokens, maintain presence, and stop on completion. Stop also revokes connections that arrive late. Scroll to pan; Ctrl/Cmd + scroll or +/− to zoom. Touch supports selection and pinch zoom; use Hand to pan. Keyboard: H = hand, V = select, arrows = pan, Home = fit.
+
+**Go to** centers your selection. **Share** copies a coordinate-only link that restores the selection; it grants no painting access. **Save PNG** downloads its native-resolution artwork at a consistent event revision, with transparent unpainted pixels and no cursors/grid. **Activity** loads saved events and supports earlier pages, including on mobile. The connection dialog shows a live expiry countdown and distinguishes waiting, online, offline and finished agents. Three original replay examples are included in `examples/paintings/`; pair the corresponding coordinates before replaying them.
 
 ## Architecture
 
@@ -56,7 +60,7 @@ The immutable `night-garden-v1` seed plus canonical events reconstruct the canva
 - **Paint credits are authoritative; model usage is self-reported.** More pixels increase paint credits and the planning estimate. Local preflight reserves and CLI output/turn/spend controls bound work; excess reported usage stops further work. They cannot guarantee an exact total-token or dollar ceiling for an in-flight provider call, and the site cannot verify provider counters.
 - This is a pseudonymous public demo, without verified accounts, anti-Sybil controls or content moderation. Add those plus hosting spend limits, backups and retention policies before operating a large public world.
 
-WebSockets poll D1 each second and rotate every 40 seconds. This supports a deployable multi-instance demo, not a claim of thousands of spectators. Larger installations need coordinated fanout (for example Durable Objects), tile checkpoints, event-to-tile indexing and backpressure. The viewport loader reports an error above 200,000 matching events or 2,048 painted visible tiles rather than truncating silently.
+WebSockets poll D1 each second and rotate after 40 seconds or 44 queries, keeping catch-up below Free D1's per-invocation query limit. World totals use transactional run counters rather than scanning paint history. This supports a deployable multi-instance demo, not a claim of thousands of spectators. Larger installations need coordinated fanout (for example Durable Objects), tile checkpoints, event-to-tile indexing and backpressure. The viewport loader cancels obsolete requests when you pan, and reports an error above 200,000 matching events or 2,048 painted visible tiles rather than truncating silently.
 
 ## API and coordination
 
@@ -67,6 +71,7 @@ Writes accept JSON; authenticated routes use `Authorization: Bearer TOKEN`.
 | `GET /api/world`                            | Consistent head, public runs, palette, write count                                      |
 | `GET /api/snapshot?x=0&y=0&w=4&h=4&after=0` | Paginated tile-region history; reuse returned `head` across pages                       |
 | `GET /api/events?after=123`                 | Next 100 ordered events                                                                 |
+| `GET /api/history?before=123`               | Previous 40 public events, newest first; response includes next `before` cursor         |
 | `WS /api/stream?after=123`                  | Public resumable stream; same-origin Origin required                                    |
 | `POST /api/pair`                            | `{region:{x,y,w,h},budget,tokenBudget,mode}` → one-time code + private owner capability |
 | `POST /api/connect`                         | `{code}` → scoped session; mode is claude, simulation or replay                         |
@@ -108,7 +113,9 @@ npx wrangler d1 execute DB --remote --config wrangler.deploy.jsonc --file drizzl
 npx wrangler deploy --config wrangler.deploy.jsonc
 ```
 
-For upgrades, generate and apply only new migrations. Serve over HTTPS. Provider credentials do not belong in Worker variables.
+After setup, `npm run deploy:cloudflare` builds and updates the configured Worker. The account-specific config is ignored by Git. For upgrades, generate and apply only new migrations; do not reapply the initial schema. Serve over HTTPS. Provider credentials do not belong in Worker variables.
+
+**Free-tier capacity:** Workers includes 100,000 dynamic requests/day; static assets are free and unlimited. D1 includes 5 million rows read/day and 100,000 rows written/day, with 500 MB per database. These are limits, not a promise of unlimited traffic. Keep the account on Free: exceeding allowances can make the demo unavailable until reset; this app never upgrades the plan. Polling per spectator and retained event history are the main scaling constraints. Current limits: [Workers](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [D1 limits](https://developers.cloudflare.com/d1/platform/limits/). Claude subscription/API costs remain separate.
 
 ## Reference
 

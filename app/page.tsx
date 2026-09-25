@@ -22,6 +22,9 @@ import {
   Leaf,
   Radio,
   Command,
+  Download,
+  Link,
+  LocateFixed,
 } from "lucide-react";
 import {
   Dialog,
@@ -33,6 +36,13 @@ import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SnapshotGate } from "@/shared/snapshot-gate.mjs";
 import { buildSnapshot } from "@/shared/snapshot.mjs";
+import { runDemo } from "@/shared/demo.mjs";
+import { fetchSnapshot } from "@/shared/snapshot-fetch.mjs";
+import {
+  parseSelectionHash,
+  selectionHash,
+  selectionRGBA,
+} from "@/shared/selection.mjs";
 import {
   TILE,
   PALETTE,
@@ -47,7 +57,6 @@ import {
   LRU,
   regionPixels,
   estimateTokens,
-  makePatches,
 } from "@/shared/world.mjs";
 type Region = { x: number; y: number; w: number; h: number };
 type Camera = { x: number; y: number; zoom: number };
@@ -67,7 +76,12 @@ type Run = {
   onlineUntil?: number;
 };
 const wait = (n: number) => new Promise((r) => setTimeout(r, n));
-async function api(path: string, body?: any, token?: string) {
+async function api(
+  path: string,
+  body?: any,
+  token?: string,
+  signal?: AbortSignal,
+) {
   const r = await fetch("/api/" + path, {
     method: body ? "POST" : "GET",
     headers: {
@@ -75,6 +89,7 @@ async function api(path: string, body?: any, token?: string) {
       ...(token ? { authorization: "Bearer " + token } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   const data: any = await r.json();
   if (!r.ok)
@@ -103,7 +118,10 @@ export default function Page() {
     mounted = useRef(true),
     owners = useRef<string[]>([]),
     snapshotGate = useRef(new SnapshotGate()),
-    replayState = useRef(false);
+    replayState = useRef(false),
+    demoAbort = useRef<AbortController | null>(null),
+    snapshotAbort = useRef<AbortController | null>(null),
+    generation = useRef(0);
   const [selection, setSelection] = useState<Region>({
       x: 12,
       y: 6,
@@ -129,6 +147,12 @@ export default function Page() {
     [replayProgress, setReplayProgress] = useState(0),
     [showPanel, setShowPanel] = useState(false),
     [events, setEvents] = useState<any[]>([]),
+    [historyBefore, setHistoryBefore] = useState<number | null>(null),
+    [historyBusy, setHistoryBusy] = useState(false),
+    [exporting, setExporting] = useState(false),
+    [shared, setShared] = useState(false),
+    [provider, setProvider] = useState("claude"),
+    [now, setNow] = useState(0),
     [origin, setOrigin] = useState("");
   const getTile = useCallback((x: number, y: number) => {
     const k = tileKey(x, y);
@@ -167,7 +191,11 @@ export default function Page() {
       cursor.current = e.seq;
       history.current.push(e);
       if (history.current.length > 4000) history.current.shift();
-      setEvents((prev) => [e, ...prev].slice(0, 40));
+      setEvents((prev) =>
+        [e, ...prev.filter((p) => p.seq !== e.seq)]
+          .sort((a, b) => b.seq - a.seq)
+          .slice(0, 1000),
+      );
       if (e.kind === "paint") {
         if (!replayState.current) apply(e.data.patches);
         paintTicks.current.push({ time: e.at, cost: e.data.cost });
@@ -219,6 +247,19 @@ export default function Page() {
   useEffect(() => {
     mounted.current = true;
     setOrigin(location.origin);
+    const restoreSelection = () => {
+      const selected = parseSelectionHash(location.hash);
+      if (!selected) return;
+      setSelection(selected);
+      camera.current = {
+        ...camera.current,
+        x: (selected.x + selected.w / 2) * TILE,
+        y: (selected.y + selected.h / 2) * TILE,
+      };
+      dirty.current = true;
+    };
+    restoreSelection();
+    window.addEventListener("hashchange", restoreSelection);
     let ws: WebSocket | undefined,
       timer: any,
       stopped = false,
@@ -267,8 +308,10 @@ export default function Page() {
             );
         });
     bootstrap();
+    void loadActivity();
     const stats = setInterval(() => {
       const now = Date.now();
+      setNow(now);
       paintTicks.current = paintTicks.current.filter(
         (t) => now - t.time < 60000,
       );
@@ -282,9 +325,12 @@ export default function Page() {
     return () => {
       stopped = true;
       mounted.current = false;
+      generation.current++;
+      demoAbort.current?.abort();
       clearTimeout(timer);
       clearInterval(stats);
       ws?.close();
+      window.removeEventListener("hashchange", restoreSelection);
     };
   }, [accept]);
   useEffect(() => {
@@ -470,31 +516,19 @@ export default function Page() {
     };
   };
   const loadSnapshot = useCallback(
-    async (bounds: Region, requestedHead?: number, includeLive = true) => {
-      let after = 0,
-        snapshotHead = requestedHead,
-        all: any[] = [];
-      for (let i = 0; i < 2000; i++) {
-        const q = new URLSearchParams({
-          ...Object.fromEntries(
-            Object.entries(bounds).map(([k, v]) => [k, String(v)]),
-          ),
-          after: String(after),
-          ...(snapshotHead !== undefined ? { head: String(snapshotHead) } : {}),
-        });
-        const d = await api("snapshot?" + q);
-        snapshotHead = d.head;
-        all.push(...d.events);
-        if (d.events.length < 100) break;
-        after = d.events.at(-1).seq;
-        if (i === 1999)
-          throw Object.assign(
-            new Error(
-              "This region has too much history to load. Select a smaller view.",
-            ),
-            { terminal: true },
-          );
-      }
+    async (
+      bounds: Region,
+      requestedHead?: number,
+      includeLive = true,
+      signal?: AbortSignal,
+    ) => {
+      const { head: snapshotHead, events: all } = await fetchSnapshot(
+        bounds,
+        (q: URLSearchParams) =>
+          api("snapshot?" + q, undefined, undefined, signal),
+        requestedHead,
+        signal,
+      );
       if (
         includeLive &&
         history.current.length === 4000 &&
@@ -512,6 +546,7 @@ export default function Page() {
           new Error("Zoom in to see this densely painted region."),
           { terminal: true },
         );
+      signal?.throwIfAborted();
       for (const k of tiles.current.items.keys()) {
         const [x, y] = k.split(",").map(Number);
         if (
@@ -529,20 +564,36 @@ export default function Page() {
     [],
   );
   useEffect(() => {
+    let pendingKey = "";
     const timer = setInterval(async () => {
       if (replayState.current) return;
       const bounds = viewportBounds(),
         key = Object.values(bounds).join(",");
+      if (snapshotAbort.current && pendingKey !== key) {
+        snapshotAbort.current.abort();
+        snapshotGate.current.cancel();
+      }
       if (!snapshotGate.current.begin(key)) return;
+      const controller = new AbortController();
+      snapshotAbort.current = controller;
+      pendingKey = key;
       try {
-        await loadSnapshot(bounds);
-        snapshotGate.current.success();
+        await loadSnapshot(bounds, undefined, true, controller.signal);
+        if (!controller.signal.aborted) snapshotGate.current.success();
       } catch (e: any) {
-        snapshotGate.current.fail(!!e.terminal);
-        setError(e.message);
+        if (!controller.signal.aborted) {
+          snapshotGate.current.fail(!!e.terminal);
+          setError(e.message);
+        }
+      } finally {
+        if (snapshotAbort.current === controller) snapshotAbort.current = null;
       }
     }, 350);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      snapshotAbort.current?.abort();
+      snapshotGate.current.cancel();
+    };
   }, [loadSnapshot]);
   useEffect(() => {
     const el = canvas.current!;
@@ -674,7 +725,99 @@ export default function Page() {
     setZoom(Math.round(camera.current.zoom * 100));
     dirty.current = true;
   };
+  function focusSelection() {
+    camera.current = {
+      x: (selection.x + selection.w / 2) * TILE,
+      y: (selection.y + selection.h / 2) * TILE,
+      zoom: Math.max(
+        0.2,
+        Math.min(
+          8,
+          (size.current.w - 80) / (selection.w * TILE),
+          (size.current.h - 160) / (selection.h * TILE),
+        ),
+      ),
+    };
+    setZoom(Math.round(camera.current.zoom * 100));
+    dirty.current = true;
+    setShowPanel(false);
+  }
+  async function shareSelection() {
+    const hash = selectionHash(selection);
+    window.history.replaceState(null, "", hash);
+    try {
+      await navigator.clipboard.writeText(
+        location.origin + location.pathname + hash,
+      );
+      setShared(true);
+      setTimeout(() => setShared(false), 2000);
+    } catch {
+      setError("The selection link is in your address bar. Copy it to share.");
+    }
+  }
+  async function exportSelection() {
+    if (exporting) return;
+    setExporting(true);
+    const bounds = { ...selection };
+    try {
+      const snapshot = await fetchSnapshot(
+        bounds,
+        (q: URLSearchParams) => api("snapshot?" + q),
+        undefined,
+        undefined,
+      );
+      const pixels = selectionRGBA(
+        bounds,
+        buildSnapshot(bounds, snapshot.events, snapshot.head),
+      );
+      const output = document.createElement("canvas");
+      output.width = pixels.width;
+      output.height = pixels.height;
+      const context = output.getContext("2d")!;
+      const data = context.createImageData(pixels.width, pixels.height);
+      data.data.set(pixels.rgba);
+      context.putImageData(data, 0, 0);
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        output.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("PNG export failed."))),
+          "image/png",
+        ),
+      );
+      const url = URL.createObjectURL(blob),
+        link = document.createElement("a");
+      link.href = url;
+      link.download = `swarmplace-${bounds.x}-${bounds.y}-${snapshot.head}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+  async function loadActivity(before?: number) {
+    setHistoryBusy(true);
+    try {
+      const data = await api("history" + (before ? `?before=${before}` : ""));
+      if (!mounted.current) return;
+      setEvents((prev) =>
+        Array.from(
+          new Map([...prev, ...data.events].map((e) => [e.seq, e])).values(),
+        )
+          .sort((a, b) => b.seq - a.seq)
+          .slice(0, 1000),
+      );
+      setHistoryBefore(data.before);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
   async function createPair() {
+    const started = generation.current;
     setBusy(true);
     setError("");
     try {
@@ -682,9 +825,15 @@ export default function Page() {
         region: selection,
         budget: regionPixels(selection) * 3,
         tokenBudget: modelBudget,
-        mode: "claude",
+        mode: provider,
       });
+      if (started !== generation.current || !mounted.current) {
+        await api("stop", {}, p.owner);
+        return;
+      }
       setPair(p);
+      setNow(Date.now());
+      setCopied(false);
       owners.current.push(p.owner);
       setDialog(true);
     } catch (e: any) {
@@ -697,63 +846,36 @@ export default function Page() {
     if (simulating) return;
     setSimulating(true);
     setError("");
-    const s = { ...selection };
+    const controller = new AbortController();
+    demoAbort.current = controller;
     try {
-      const cells: Region[] = [];
-      for (let y = 0; y < s.h; y++)
-        for (let x = 0; x < s.w; x++)
-          if (cells.length < 4)
-            cells.push({ x: s.x + x, y: s.y + y, w: 1, h: 1 });
-      await Promise.all(
-        cells.map(async (r, i) => {
-          const p = await api("pair", {
-            region: r,
-            budget: 3072,
-            tokenBudget: 1000,
-            mode: "simulation",
-          });
-          owners.current.push(p.owner);
-          const session = await api("connect", { code: p.code });
-          for (const phase of ["underpainting", "blocking", "texture"]) {
-            const patches = makePatches(r, phase, i);
-            for (let j = 0; j < patches.length; j += 64) {
-              if (!mounted.current) return;
-              const payload = {
-                op: crypto.randomUUID(),
-                phase,
-                patches: patches.slice(j, j + 64),
-                usage: { input: 0, output: 0 },
-              };
-              for (let retry = 0; retry < 6; retry++) {
-                try {
-                  await api("paint", payload, session.token);
-                  break;
-                } catch (e: any) {
-                  if (![429, 409, 503].includes(e.status) || retry === 5)
-                    throw e;
-                  await wait(500 * (retry + 1));
-                }
-              }
-              await wait(350 + i * 30);
-            }
-          }
-          await api("stop", {}, session.token);
-        }),
-      );
+      await runDemo({
+        region: { ...selection },
+        request: api,
+        signal: controller.signal,
+        onOwner: (owner: string) => {
+          owners.current.push(owner);
+        },
+      });
     } catch (e: any) {
-      setError(e.message);
+      if (!controller.signal.aborted) setError(e.message);
     } finally {
+      if (demoAbort.current === controller) demoAbort.current = null;
       setSimulating(false);
     }
   }
   async function stop() {
-    for (const owner of owners.current) {
-      try {
-        await api("stop", {}, owner);
-      } catch {}
-    }
-    owners.current = [];
+    generation.current++;
+    demoAbort.current?.abort();
+    const mine = owners.current.splice(0);
     setPair(null);
+    await Promise.allSettled(mine.map((owner) => api("stop", {}, owner)));
+  }
+  async function renewPair() {
+    setBusy(true);
+    if (pair) await api("stop", {}, pair.owner).catch(() => {});
+    setPair(null);
+    await createPair();
   }
   async function replay() {
     if (replaying) return;
@@ -762,6 +884,8 @@ export default function Page() {
       setError("Paint a selection first, then replay its brushwork.");
       return;
     }
+    snapshotAbort.current?.abort();
+    snapshotGate.current.cancel();
     setReplaying(true);
     replayState.current = true;
     try {
@@ -836,8 +960,18 @@ export default function Page() {
     return () => lifecycle.abort();
   }, []);
   const command = pair
-    ? `npx --yes --package=github:MustafaAH10/swarmplace swarmplace --world ${origin} --code ${pair.code} --provider claude`
+    ? `npx --yes --package=github:MustafaAH10/swarmplace swarmplace --world ${origin} --code ${pair.code} --provider ${pair.run.mode}${pair.run.mode === "replay" ? " --input painting.json" : ""}`
     : "";
+  const pairRun = runs.find((r) => r.id === pair?.run.id);
+  const paired = !!pairRun?.onlineUntil;
+  const pairOnline =
+    !!pairRun?.active &&
+    pairRun.expires > now &&
+    (pairRun.onlineUntil || 0) > now;
+  const pairFinished = !!pairRun && (!pairRun.active || pairRun.expires <= now);
+  const secondsLeft = pair
+    ? Math.min(120, Math.max(0, Math.ceil((pair.expires - now) / 1000)))
+    : 0;
   const active = runs.filter(
     (r) =>
       r.active && r.expires > Date.now() && (r.onlineUntil || 0) > Date.now(),
@@ -1114,6 +1248,17 @@ export default function Page() {
                       </div>
                     )}
                   </div>
+                  {historyBefore !== null && events.length < 1000 && (
+                    <button
+                      className="button demo-button"
+                      disabled={historyBusy}
+                      onClick={() => loadActivity(historyBefore)}
+                    >
+                      {historyBusy
+                        ? "Loading history…"
+                        : "Load earlier activity"}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -1239,6 +1384,19 @@ export default function Page() {
               />
             </label>
           </div>
+          <div className="selection-actions">
+            <button onClick={focusSelection} title="Go to selection">
+              <LocateFixed size={15} /> Go to
+            </button>
+            <button onClick={shareSelection}>
+              <Link size={15} />
+              {shared ? "Copied!" : "Share"}
+            </button>
+            <button onClick={exportSelection} disabled={exporting}>
+              <Download size={15} />
+              {exporting ? "Saving…" : "Save PNG"}
+            </button>
+          </div>
           <section className="budget-section">
             <div className="row">
               <span className="label">Model token budget</span>
@@ -1273,6 +1431,18 @@ export default function Page() {
               ))}
             </div>
           </div>
+          <label className="provider-select">
+            Run on your computer
+            <select
+              aria-label="Agent provider"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              <option value="claude">Claude Code · your account</option>
+              <option value="simulation">Simulator · no model needed</option>
+              <option value="replay">Replay · saved painting file</option>
+            </select>
+          </label>
           <button
             className="button connect-primary"
             onClick={createPair}
@@ -1387,39 +1557,83 @@ export default function Page() {
           </span>
           <DialogTitle>Give your agent a place to paint.</DialogTitle>
           <DialogDescription>
-            Your selection is ready. Run this on the machine where you use
-            Claude Code. The connection code expires in 2 minutes and works
-            once.
+            Run this command in your terminal. Your agent receives only the
+            selected region and its paint budget. Connection codes work once.
           </DialogDescription>
           <div className="modal-summary">
             <span>
-              {selection.w * 32} × {selection.h * 32} pixels
+              {(pair?.run.region.w || 0) * 32} ×{" "}
+              {(pair?.run.region.h || 0) * 32} pixels
             </span>
-            <span>{fmt(modelBudget)} token target</span>
-            <span>Local Claude</span>
+            <span>{fmt(pair?.run.tokenBudget || 0)} token target</span>
+            <span>
+              {pair?.run.mode === "claude"
+                ? "Local Claude"
+                : pair?.run.mode === "replay"
+                  ? "Local replay"
+                  : "Local simulator"}
+            </span>
           </div>
-          <div className="command-block">
-            <code>{command}</code>
-            <button
-              aria-label="Copy agent command"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(command);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                } catch {
-                  setError("Select and copy the command manually.");
-                }
-              }}
-            >
-              {copied ? <Check size={17} /> : <Copy size={17} />}
-            </button>
+          <div className="pair-status" role="status">
+            {paired
+              ? pairFinished
+                ? "Agent finished · its painting is saved"
+                : pairOnline
+                  ? "Connected · watch your agent on the canvas"
+                  : "Agent offline · start a fresh run to reconnect"
+              : secondsLeft > 0
+                ? `Waiting for your agent · ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")} left`
+                : "Connection code expired"}
+            {((!paired && secondsLeft === 0) || (paired && !pairOnline)) && (
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={renewPair}
+              >
+                Create a fresh code
+              </button>
+            )}
           </div>
-          <p className="modal-help">
-            Add <code>--prompt "Paint moonlit lilies"</code> to choose a
-            subject. Run <code>claude auth login</code> first if you haven’t
-            connected your account.
-          </p>
+          {!paired && secondsLeft > 0 && (
+            <>
+              <div className="command-block">
+                <code>{command}</code>
+                <button
+                  aria-label="Copy agent command"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(command);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch {
+                      setError("Select and copy the command manually.");
+                    }
+                  }}
+                >
+                  {copied ? <Check size={17} /> : <Copy size={17} />}
+                </button>
+              </div>
+              <p className="modal-help">
+                {pair?.run.mode === "claude" ? (
+                  <>
+                    Add <code>--prompt "Paint moonlit lilies"</code> to choose a
+                    subject. Run <code>claude auth login</code> first if you
+                    haven’t connected your account.
+                  </>
+                ) : pair?.run.mode === "replay" ? (
+                  <>
+                    Replace <code>painting.json</code> with a file exported by a
+                    Swarmplace agent.
+                  </>
+                ) : (
+                  <>
+                    The simulator paints with the shared palette and uses zero
+                    model tokens.
+                  </>
+                )}
+              </p>
+            </>
+          )}
           {pair?.conflicts.length > 0 && (
             <p className="overlap-note">
               {pair.conflicts.length} agent(s) also intend to paint here. Your
@@ -1429,8 +1643,8 @@ export default function Page() {
           <div className="privacy-note">
             <ShieldCheck size={20} />
             <p>
-              Only paint commands, phase, and usage reach the site. Claude runs
-              locally with file and shell tools disabled.
+              Only paint commands, phase, and usage reach the site. Your
+              credentials and private prompts are never sent to this site.
             </p>
           </div>
           <button className="button dark" onClick={() => setDialog(false)}>

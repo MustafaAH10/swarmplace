@@ -1,6 +1,6 @@
 {
   "name": "swarmplace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -18,7 +18,8 @@
     "stress": "node cli/stress.mjs",
     "db:local": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_absurd_piledriver.sql",
     "test:stream": "node tests/stream-smoke.mjs",
-    "benchmark:render": "node tests/render-benchmark.mjs"
+    "benchmark:render": "node tests/render-benchmark.mjs",
+    "deploy:cloudflare": "npm run build && node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js deploy --config wrangler.deploy.jsonc"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

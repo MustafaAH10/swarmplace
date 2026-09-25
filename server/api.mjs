@@ -130,9 +130,7 @@ export async function handleAPI(req, env) {
         db.prepare(
           "SELECT id,data,used,budget,expires,active FROM runs ORDER BY expires DESC LIMIT 100",
         ),
-        db.prepare(
-          "SELECT COALESCE(SUM(json_extract(data,'$.cost')),0) AS total FROM events WHERE kind='paint'",
-        ),
+        db.prepare("SELECT COALESCE(SUM(used),0) AS total FROM runs"),
       ]);
       return json({
         head: heads.results[0].seq,
@@ -157,6 +155,27 @@ export async function handleAPI(req, env) {
       if (!Number.isSafeInteger(a) || a < 0)
         throw new Fault(400, "Invalid event cursor.");
       return json({ events: await eventPage(db, a), head: await head(db) });
+    }
+    if (path === "/api/history" && req.method === "GET") {
+      const before = Number(
+        url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER,
+      );
+      if (!Number.isSafeInteger(before) || before < 1)
+        throw new Fault(400, "Invalid history cursor.");
+      const found = await rows(
+        db
+          .prepare(
+            "SELECT seq,kind,data,at FROM events WHERE seq<? ORDER BY seq DESC LIMIT 41",
+          )
+          .bind(before),
+      );
+      const events = found
+        .slice(0, 40)
+        .map((e) => ({ ...e, data: JSON.parse(e.data) }));
+      return json({
+        events,
+        before: found.length > 40 ? events.at(-1).seq : null,
+      });
     }
     if (path === "/api/snapshot" && req.method === "GET") {
       const r = {
@@ -226,19 +245,17 @@ export async function handleAPI(req, env) {
         db
           .prepare("INSERT INTO sessions(hash,run_id,expires) VALUES(?,?,?)")
           .bind(await digest(owner), id, now + TTL),
-        db
-          .prepare("INSERT INTO events(kind,data,at) VALUES(?,?,?)")
-          .bind(
-            "claim",
-            JSON.stringify({
-              ...info,
-              budget: b.budget,
-              used: 0,
-              expires: now + TTL,
-              active: true,
-            }),
-            now,
-          ),
+        db.prepare("INSERT INTO events(kind,data,at) VALUES(?,?,?)").bind(
+          "claim",
+          JSON.stringify({
+            ...info,
+            budget: b.budget,
+            used: 0,
+            expires: now + TTL,
+            active: true,
+          }),
+          now,
+        ),
       ]);
       return json(
         { code, owner, run: info, expires: now + 120000, conflicts },
